@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Local data / secrets
+# data/*.csv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dissertation drafts (submitted separately)
+dissertation/
+
+# Personal planning/handoff notes
+MASTER_HANDOFF*.md
+MASTER_HANDOFF_PASTE_IN_NEW_CHAT.md
+START_HERE_KANZA.md
+FYP_START_HERE.md
+2_WEEK_PLAN.md
+SLIDES_OUTLINE.md
+PRESENTATION.md

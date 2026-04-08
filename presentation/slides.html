@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attack-Aware Autoscaling — Presentation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #f8fafc;
+            --card: #e8f5e9;
+            --text: #1e293b;
+            --muted: #475569;
+            --accent: #047857;
+        }
+        html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+        body {
+            font-family: 'Outfit', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .slide {
+            min-height: 100vh;
+            padding: 3rem 4rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            scroll-snap-align: start;
+        }
+        .slide h1 {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin-bottom: 1.5rem;
+            color: var(--text);
+        }
+        .slide h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--muted); }
+        .slide ul { list-style: none; }
+        .slide li {
+            margin-bottom: 0.75rem;
+            padding-left: 1.25rem;
+            position: relative;
+            color: var(--text);
+        }
+        .slide li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.5rem;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+        }
+        .slide p { margin-bottom: 0.75rem; color: var(--muted); max-width: 32rem; }
+        .slide .one-line { font-size: 1.15rem; color: var(--text); font-weight: 600; max-width: 28rem; }
+        .slide .sub { font-size: 0.95rem; color: var(--muted); margin-top: 0.5rem; }
+        .slide-title { text-align: center; }
+        .slide-title h1 { font-size: 2.5rem; }
+        .slide-title .sub { font-size: 1.1rem; }
+        .slide-num { position: fixed; bottom: 1rem; right: 1.5rem; font-size: 0.8rem; color: var(--muted); }
+        .diagram {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin: 1.5rem 0;
+            flex-wrap: wrap;
+        }
+        .diagram .box {
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            font-weight: 700;
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            color: var(--text);
+        }
+        .diagram .box.gateway { border-color: var(--accent); color: var(--accent); }
+        .diagram .arrow { color: var(--muted); font-size: 1.5rem; }
+        .design-card {
+            background: var(--card);
+            border: 1px solid #a5d6a7;
+            border-radius: 12px;
+            padding: 1.25rem 1.5rem;
+            margin-top: 0.5rem;
+            max-width: 32rem;
+        }
+        .design-card li::before { background: var(--accent); }
+        code { background: #e2e8f0; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <!-- Slide 1 -->
+    <div class="slide slide-title">
+        <h1>Attack-Aware Autoscaling for Microservices</h1>
+        <p class="sub">Final Year Project</p>
+        <p class="sub" style="margin-top:1rem;">[Your name · Course · Date]</p>
+        <span class="slide-num">1 / 20</span>
+    </div>
+
+    <!-- Slide 2 -->
+    <div class="slide">
+        <h1>What I'm going to cover</h1>
+        <ul>
+            <li>Problem: autoscaling can't tell real users from attack</li>
+            <li>Solution: classify traffic with ML; scale when normal, block when attack</li>
+            <li>Microservices context: Gateway + Catalog</li>
+            <li>Live demo</li>
+        </ul>
+        <span class="slide-num">2 / 20</span>
+    </div>
+
+    <!-- Slide 3 -->
+    <div class="slide">
+        <h1>Why normal autoscaling is a problem</h1>
+        <ul>
+            <li>When traffic spikes, systems often <strong>scale up</strong> (add servers)</li>
+            <li>They <strong>don't distinguish</strong> between real users and attackers</li>
+        </ul>
+        <span class="slide-num">3 / 20</span>
+    </div>
+
+    <!-- Slide 4 -->
+    <div class="slide">
+        <h1>What goes wrong during an attack</h1>
+        <ul>
+            <li>During a DDoS or brute force, traffic <strong>looks like</strong> high load</li>
+            <li>Autoscaler <strong>adds more servers</strong> → you <strong>pay for attack traffic</strong></li>
+            <li>Real users can still suffer; cost goes up with no benefit</li>
+        </ul>
+        <span class="slide-num">4 / 20</span>
+    </div>
+
+    <!-- Slide 5 -->
+    <div class="slide">
+        <h1>What we want instead</h1>
+        <ul>
+            <li><strong>Normal traffic</strong> + high load → scale up (add servers)</li>
+            <li><strong>Attack traffic</strong> → do <strong>not</strong> scale; <strong>block</strong> it instead</li>
+        </ul>
+        <p class="sub">"Attack-aware" = we are aware it's attack and change behaviour</p>
+        <span class="slide-num">5 / 20</span>
+    </div>
+
+    <!-- Slide 6 -->
+    <div class="slide">
+        <h1>The idea in one sentence</h1>
+        <p class="one-line">We use ML to classify traffic as normal or attack; we only scale when it's normal, and we block attack traffic so we don't pay to scale on it.</p>
+        <span class="slide-num">6 / 20</span>
+    </div>
+
+    <!-- Slide 7 -->
+    <div class="slide">
+        <h1>Why microservices?</h1>
+        <ul>
+            <li>Modern systems are built as <strong>many small services</strong> (e.g. one for products, one for payments)</li>
+            <li>Traffic hits an <strong>entry point</strong> (gateway) before reaching those services</li>
+            <li>We put <strong>attack-aware logic at the gateway</strong> so the rest doesn't scale on attack</li>
+        </ul>
+        <span class="slide-num">7 / 20</span>
+    </div>
+
+    <!-- Slide 8 -->
+    <div class="slide">
+        <h1>What is a microservice?</h1>
+        <ul>
+            <li>A <strong>small, focused part</strong> of a bigger system that does <strong>one job</strong></li>
+            <li>Services <strong>talk to each other</strong> over the network (e.g. HTTP)</li>
+            <li>Example: Catalog = one service (products); Gateway = another (entry + defence)</li>
+        </ul>
+        <span class="slide-num">8 / 20</span>
+    </div>
+
+    <!-- Slide 9 -->
+    <div class="slide">
+        <h1>How we do it (high level)</h1>
+        <ul>
+            <li><strong>1.</strong> Collect or observe traffic metrics (e.g. requests per second, errors)</li>
+            <li><strong>2.</strong> Use <strong>ML</strong> to classify: normal vs attack (and attack type)</li>
+            <li><strong>3.</strong> If attack → gateway <strong>blocks</strong> (429); if normal → <strong>allow</strong></li>
+        </ul>
+        <span class="slide-num">9 / 20</span>
+    </div>
+
+    <!-- Slide 10 — Design -->
+    <div class="slide">
+        <h1>Design</h1>
+        <p class="sub">To design and explain the system, I used:</p>
+        <div class="design-card">
+            <ul>
+                <li><strong>System Architecture Diagram:</strong> Overall structure (Shop → Gateway → Catalog)</li>
+                <li><strong>Use case / flow:</strong> How traffic is classified and how the gateway switches between allow and block</li>
+                <li><strong>Flowchart:</strong> Steps from "traffic arrives" to "block" or "allow"</li>
+            </ul>
+        </div>
+        <span class="slide-num">10 / 20</span>
+    </div>
+
+    <!-- Slide 11 -->
+    <div class="slide">
+        <h1>The ML part (without the maths)</h1>
+        <ul>
+            <li>Train a <strong>classifier</strong> on labelled data (normal vs attack)</li>
+            <li><strong>Input:</strong> e.g. requests per second, error count</li>
+            <li><strong>Output:</strong> "normal" or "attack" (and type: DDoS, brute force, etc.)</li>
+            <li>Gateway (or detector) uses this to decide: allow or block</li>
+        </ul>
+        <span class="slide-num">11 / 20</span>
+    </div>
+
+    <!-- Slide 12 -->
+    <div class="slide">
+        <h1>System architecture</h1>
+        <div class="diagram">
+            <span class="box">Shop / User</span>
+            <span class="arrow">→</span>
+            <span class="box gateway">Gateway (8000)</span>
+            <span class="arrow">→</span>
+            <span class="box">Catalog (8001)</span>
+        </div>
+        <p>Dashboard and detector talk to the Gateway (status, metrics, set block/normal)</p>
+        <span class="slide-num">12 / 20</span>
+    </div>
+
+    <!-- Slide 13 -->
+    <div class="slide">
+        <h1>The two microservices in this project</h1>
+        <ul>
+            <li><strong>Gateway:</strong> Entry point. Forwards to Catalog when normal; returns 429 (block) when attack</li>
+            <li><strong>Catalog:</strong> Serves product data. Doesn't decide normal vs attack</li>
+        </ul>
+        <p class="sub">Minimal microservices system where we demonstrate attack-aware behaviour</p>
+        <span class="slide-num">13 / 20</span>
+    </div>
+
+    <!-- Slide 14 -->
+    <div class="slide">
+        <h1>What runs automatically</h1>
+        <ul>
+            <li>A <strong>detector</strong> periodically reads live metrics from the Gateway</li>
+            <li>Runs the <strong>ML model</strong>; if attack-like → tells Gateway to <strong>block</strong></li>
+            <li>When traffic looks normal again → tells Gateway to <strong>allow</strong></li>
+        </ul>
+        <p class="sub">System can switch to defence and back without someone clicking buttons</p>
+        <span class="slide-num">14 / 20</span>
+    </div>
+
+    <!-- Slide 15 -->
+    <div class="slide">
+        <h1>What I built — overview</h1>
+        <ul>
+            <li><strong>Backend:</strong> Gateway + Catalog (microservices), detector script, ML model</li>
+            <li><strong>Dashboard:</strong> Status, blocked count, defence history, set Normal/Blocking</li>
+            <li><strong>Demo website:</strong> Shop + demo page with "Simulate attack" / "Restore normal"</li>
+            <li>One command: <code>py run_demo.py</code></li>
+        </ul>
+        <span class="slide-num">15 / 20</span>
+    </div>
+
+    <!-- Slide 16 -->
+    <div class="slide">
+        <h1>What you'll see in the demo</h1>
+        <ul>
+            <li><strong>1.</strong> Open demo page (Shop → Gateway → Catalog)</li>
+            <li><strong>2.</strong> Click "Simulate attack" → Gateway red, shop shows "We're protecting the system"</li>
+            <li><strong>3.</strong> Click "Restore normal" → shop shows products again</li>
+            <li><strong>4.</strong> (Optional) Dashboard: same state, defence history</li>
+        </ul>
+        <span class="slide-num">16 / 20</span>
+    </div>
+
+    <!-- Slide 17 -->
+    <div class="slide">
+        <h1>Live demo</h1>
+        <p><strong>http://localhost:3000/demo.html</strong></p>
+        <p class="sub" style="margin-top:1rem;">Run <code>py run_demo.py</code> then open the link. Simulate attack → Restore normal.</p>
+        <span class="slide-num">17 / 20</span>
+    </div>
+
+    <!-- Slide 18 -->
+    <div class="slide">
+        <h1>What the demo showed</h1>
+        <ul>
+            <li>We <strong>classified</strong> traffic (normal vs attack) and <strong>reacted</strong> at the gateway</li>
+            <li>We <strong>blocked</strong> attack traffic (429) instead of scaling on it</li>
+            <li>Shop and dashboard both reflect the same Gateway state</li>
+        </ul>
+        <span class="slide-num">18 / 20</span>
+    </div>
+
+    <!-- Slide 19 -->
+    <div class="slide">
+        <h1>Limitations and future work</h1>
+        <ul>
+            <li><strong>Limitations:</strong> One gateway, one backend; real systems have more services and metrics</li>
+            <li><strong>Future:</strong> More attack types, more data, integration with e.g. Kubernetes</li>
+        </ul>
+        <span class="slide-num">19 / 20</span>
+    </div>
+
+    <!-- Slide 20 -->
+    <div class="slide slide-title">
+        <h1>Conclusion</h1>
+        <ul style="text-align:left; max-width:28rem; margin:1rem auto 0;">
+            <li><strong>Problem:</strong> Autoscaling that can't tell real users from attack wastes cost</li>
+            <li><strong>Approach:</strong> Classify with ML; at the gateway, allow when normal, block when attack</li>
+            <li><strong>What I did:</strong> Microservices (Gateway + Catalog), ML, detector, dashboard, demo — working</li>
+        </ul>
+        <p class="sub" style="margin-top:2rem;">Thank you — Questions?</p>
+        <p class="sub">[Your name · Attack-Aware Autoscaling for Microservices]</p>
+        <span class="slide-num">20 / 20</span>
+    </div>
+
+    <script>
+        document.body.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowDown' || e.key === ' ' || e.key === 'PageDown') {
+                e.preventDefault();
+                var slides = document.querySelectorAll('.slide');
+                var current = Array.from(slides).findIndex(function(s) { return s.getBoundingClientRect().top >= -10; });
+                var next = current >= 0 && current < slides.length - 1 ? current + 1 : current;
+                if (slides[next]) slides[next].scrollIntoView({ behavior: 'smooth' });
+            }
+            if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+                e.preventDefault();
+                var slides = document.querySelectorAll('.slide');
+                var current = Array.from(slides).findIndex(function(s) { return s.getBoundingClientRect().top >= -10; });
+                if (current > 0) slides[current - 1].scrollIntoView({ behavior: 'smooth' });
+            }
+        });
+    </script>
+</body>
+</html>

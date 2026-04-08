@@ -1,0 +1,18 @@
+# Attack-Aware Autoscaling - Final Year Project (microservices testbed)
+# Run: docker compose up -d
+# Scale gateway: docker compose up -d --scale gateway=3
+
+services:
+  catalog:
+    build: ./services/catalog
+    ports:
+      - "8001:8001"
+
+  gateway:
+    build: ./services/api
+    ports:
+      - "8000:8000"
+    environment:
+      - CATALOG_URL=http://catalog:8001
+    depends_on:
+      - catalog

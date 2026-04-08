@@ -1,0 +1,2283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <meta name="description" content="Live API gateway prototype: edge defence versus naive autoscaling — real telemetry, ML-informed policy, persistent audit trail.">
+    <meta name="theme-color" content="#0b0d12">
+    <meta name="color-scheme" content="dark">
+    <title>Meridian · Live system demo</title>
+    <script>
+        (function () {
+            if (/[?&](showcase|exhibit)=1(?:&|$)/.test(location.search)) {
+                document.documentElement.classList.add('showcase-mode');
+            }
+        })();
+    </script>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #161d2e;
+            --surface: #1e293b;
+            --surface-elevated: #243047;
+            --border: #334155;
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-deep: #0ea5e9;
+            --ok: #34d399;
+            --warn-bg: #2d2320;
+            --warn-border: #7c5e54;
+            --warn-text: #e7d5cf;
+            --danger: #f87171;
+            --danger-bright: #fecaca;
+            --danger-bg: #3f1218;
+            --danger-border: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.45);
+            --glow-teal: rgba(45, 212, 191, 0.12);
+            --glow-sky: rgba(56, 189, 248, 0.18);
+            --glow-violet: rgba(167, 139, 250, 0.1);
+        }
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.5;
+            font-size: 15px;
+            position: relative;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            background:
+                radial-gradient(ellipse 90% 55% at 50% -25%, var(--glow-sky), transparent 58%),
+                radial-gradient(ellipse 55% 45% at 100% 15%, var(--glow-teal), transparent 50%),
+                radial-gradient(ellipse 45% 40% at 0% 60%, var(--glow-violet), transparent 48%),
+                linear-gradient(165deg, #1a2234 0%, var(--bg) 45%, #1b2640 100%);
+        }
+        body.demo-attack-active::before {
+            background:
+                radial-gradient(ellipse 80% 55% at 50% 0%, rgba(239, 68, 68, 0.28), transparent 55%),
+                radial-gradient(ellipse 55% 45% at 100% 80%, rgba(220, 38, 38, 0.14), transparent 50%),
+                linear-gradient(165deg, #3a1218 0%, #161d2e 42%, #1a1520 100%);
+        }
+        body.demo-attack-active {
+            box-shadow: inset 0 0 0 3px rgba(239, 68, 68, 0.35);
+        }
+
+        .defence-alert-bar {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 0.5rem 1rem;
+            padding: 0.65rem 1.25rem;
+            text-align: center;
+            font-size: 0.875rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: #fff;
+            background: linear-gradient(90deg, #7f1d1d 0%, #b91c1c 35%, #991b1b 100%);
+            border-bottom: 2px solid #fca5a5;
+            box-shadow: 0 4px 24px var(--danger-glow);
+            position: sticky;
+            top: 0;
+            z-index: 40;
+        }
+        body.demo-attack-active .defence-alert-bar {
+            display: flex;
+            z-index: 50;
+        }
+        body.has-offline-gateway .defence-alert-bar {
+            display: none !important;
+        }
+        .defence-alert-bar .defence-alert-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #fef08a;
+            box-shadow: 0 0 14px #facc15;
+            animation: defence-dot-pulse 1s ease-in-out infinite;
+        }
+        @keyframes defence-dot-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.75; transform: scale(0.92); }
+        }
+        .defence-alert-bar code {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 0.82em;
+            padding: 0.1em 0.35em;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 4px;
+        }
+        .defence-alert-bar .defence-alert-sub {
+            font-weight: 500;
+            opacity: 0.95;
+            font-size: 0.8125rem;
+        }
+
+        .gateway-offline-bar {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 0.5rem 0.75rem;
+            padding: 0.6rem 1.25rem;
+            text-align: center;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: #fef3c7;
+            background: linear-gradient(90deg, #78350f 0%, #92400e 45%, #78350f 100%);
+            border-bottom: 2px solid rgba(251, 191, 36, 0.55);
+            position: sticky;
+            top: 0;
+            z-index: 60;
+        }
+        .gateway-offline-bar.is-visible {
+            display: flex;
+        }
+        body.has-offline-gateway .demo-header {
+            opacity: 0.92;
+        }
+        .gateway-offline-bar code {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 0.85em;
+            padding: 0.08em 0.35em;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 4px;
+        }
+
+        .demo-header.defence-active {
+            border-bottom-color: rgba(239, 68, 68, 0.55);
+            background: linear-gradient(180deg, rgba(80, 20, 28, 0.55) 0%, rgba(30, 41, 59, 0.98) 100%);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+        }
+        body > *:not(.demo-busy-overlay) {
+            position: relative;
+            z-index: 1;
+        }
+
+        .demo-header {
+            padding: 1rem 1.75rem;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, var(--surface-elevated) 0%, var(--surface) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        .demo-header h1 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: var(--text);
+        }
+        .demo-header h1 span { color: var(--accent); font-weight: 600; }
+        .demo-header .tag { font-size: 0.8125rem; color: var(--muted); font-weight: 400; margin-top: 0.2rem; }
+        .demo-header .badge {
+            font-size: 0.75rem;
+            padding: 0.35rem 0.65rem;
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--muted);
+            font-weight: 500;
+            border: 1px solid var(--border);
+        }
+
+        .hero {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem 1.25rem;
+            text-align: left;
+        }
+        .hero .punch {
+            font-size: clamp(1.2rem, 2.8vw, 1.55rem);
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.25;
+            margin-bottom: 0.65rem;
+            color: var(--text);
+        }
+        .hero .subhook {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+        .hero p {
+            color: var(--muted);
+            font-size: 0.9375rem;
+            line-height: 1.65;
+        }
+        .hero p strong { color: #c8cdd4; font-weight: 600; }
+
+        .threat-banner {
+            max-width: 920px;
+            margin: 0 auto 1rem;
+            padding: 0 1.5rem;
+            overflow: hidden;
+            max-height: 0;
+            opacity: 0;
+            transition: max-height 0.5s ease, opacity 0.45s ease, margin 0.35s ease;
+        }
+        .threat-banner.open {
+            max-height: 120px;
+            opacity: 1;
+            margin-bottom: 1.25rem;
+        }
+        .threat-banner-inner {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.85rem;
+            padding: 0.9rem 1.1rem;
+            border-radius: 8px;
+            border: 1px solid rgba(239, 68, 68, 0.45);
+            background: linear-gradient(135deg, rgba(31, 18, 21, 0.95), rgba(24, 27, 32, 0.98));
+            box-shadow: 0 0 40px rgba(239, 68, 68, 0.12);
+        }
+        .threat-banner-inner .wb-icon {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--danger-bright);
+            border: 1px solid var(--danger-border);
+            padding: 0.2rem 0.45rem;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+        .threat-banner-inner .wb-text { font-size: 0.875rem; color: #fecaca; line-height: 1.5; }
+        .threat-banner-inner .wb-text strong { color: #fff; font-weight: 600; }
+
+        .story-rail-wrap {
+            max-width: 920px;
+            margin: 0 auto 1.35rem;
+            padding: 0 1.5rem;
+        }
+        .story-rail-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 0.55rem;
+        }
+        .story-rail {
+            list-style: none;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: stretch;
+            gap: 0.35rem;
+            padding: 0.65rem 0.75rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .story-step {
+            flex: 1 1 0;
+            min-width: 72px;
+            text-align: center;
+            padding: 0.45rem 0.35rem;
+            border-radius: 6px;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            border: 1px solid transparent;
+            transition: color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+        }
+        .story-step.done {
+            color: #6b9e86;
+            background: rgba(45, 138, 94, 0.08);
+        }
+        .story-step.active {
+            color: var(--text);
+            border-color: var(--accent);
+            background: rgba(61, 110, 232, 0.12);
+            box-shadow: 0 0 0 1px rgba(61, 110, 232, 0.2);
+        }
+        .story-step.active.danger {
+            color: #fecaca;
+            border-color: var(--danger-border);
+            background: rgba(239, 68, 68, 0.12);
+            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+            animation: story-pulse 1.8s ease-in-out infinite;
+        }
+        .story-step.active.recover-pulse {
+            animation: story-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes story-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.72; }
+        }
+
+        .sparkline-section {
+            max-width: 920px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+        }
+        .sparkline-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem 0.65rem;
+        }
+        .sparkline-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.35rem;
+        }
+        .sparkline-head span:first-child {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+        .sparkline-head .spark-peak {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .sparkline-svg {
+            display: block;
+            width: 100%;
+            height: 72px;
+        }
+        .sparkline-svg path.area {
+            fill: url(#sparkGrad);
+        }
+        .sparkline-svg path.line {
+            fill: none;
+            stroke: var(--accent);
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        body.demo-attack-active .sparkline-svg path.line {
+            stroke: var(--danger-bright);
+        }
+
+        .console-wrap {
+            max-width: 920px;
+            margin: 0 auto 1rem;
+            padding: 0 1.5rem;
+        }
+        .console-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 0.45rem;
+        }
+        .console-feed {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 0.7rem;
+            line-height: 1.55;
+            background: var(--surface-elevated);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.65rem 0.75rem;
+            max-height: 7.5rem;
+            overflow-y: auto;
+            color: #cbd5e1;
+        }
+        .console-feed .line { margin: 0; white-space: pre-wrap; word-break: break-all; }
+        .console-feed .line.c-warn { color: #fbbf24; }
+        .console-feed .line.c-ok { color: #6ee7b7; }
+        .console-feed .line.c-err { color: var(--danger-bright); }
+
+        .policy-lab-wrap {
+            max-width: 920px;
+            margin: 0 auto 1.35rem;
+            padding: 0 1.5rem;
+        }
+        .policy-lab-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 0.55rem;
+        }
+        .policy-lab {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+        @media (max-width: 720px) {
+            .policy-lab { grid-template-columns: 1fr; }
+        }
+        .policy-col {
+            border-radius: 8px;
+            padding: 1rem 1.1rem;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            text-align: left;
+        }
+        .policy-col h3 {
+            font-size: 0.8125rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 0.5rem;
+        }
+        .policy-col.naive h3 { color: #94a3b8; }
+        .policy-col.yours {
+            border-color: rgba(61, 110, 232, 0.45);
+            background: linear-gradient(145deg, rgba(61, 110, 232, 0.08), var(--surface));
+        }
+        .policy-col.yours h3 { color: #93b4f8; }
+        .policy-col p {
+            font-size: 0.8125rem;
+            line-height: 1.55;
+            color: var(--muted);
+            margin: 0;
+        }
+        .shield-estimate {
+            max-width: 920px;
+            margin: 0.5rem auto 0;
+            padding: 0 1.5rem;
+            font-size: 0.8125rem;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+        .shield-estimate strong {
+            font-family: 'IBM Plex Mono', monospace;
+            color: #9fd4b8;
+            font-weight: 600;
+        }
+
+        .verdict-section {
+            max-width: 920px;
+            margin: 1rem auto 1.25rem;
+            padding: 0 1.5rem;
+        }
+        .verdict-label {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            margin-bottom: 0.55rem;
+        }
+        .verdict-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.85rem;
+        }
+        .verdict-chips .chip {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 0.3rem 0.5rem;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: #b8c0c8;
+        }
+        .verdict-chips .chip.danger {
+            border-color: var(--danger-border);
+            color: var(--danger-bright);
+            background: rgba(239, 68, 68, 0.08);
+        }
+        .verdict-chips .chip.ok {
+            border-color: #2d5a45;
+            color: #6ee7b7;
+            background: rgba(45, 138, 94, 0.1);
+        }
+        .verdict-chips .chip.edge-block {
+            border-color: #b45309;
+            color: #fdba74;
+            background: rgba(180, 83, 9, 0.12);
+        }
+        .verdict-chips .chip.edge-fwd {
+            border-color: rgba(61, 110, 232, 0.5);
+            color: #93c5fd;
+            background: rgba(61, 110, 232, 0.1);
+        }
+        .verdict-chips .chip.muted {
+            opacity: 0.85;
+            font-weight: 500;
+        }
+        .verdict-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 0.65rem;
+        }
+        @media (max-width: 900px) {
+            .verdict-columns { grid-template-columns: 1fr; }
+        }
+        .verdict-box {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 0.85rem;
+            background: var(--surface);
+            text-align: left;
+        }
+        .verdict-box h4 {
+            font-size: 0.6875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            margin-bottom: 0.45rem;
+        }
+        .verdict-box p {
+            font-size: 0.8125rem;
+            line-height: 1.55;
+            color: #c8cdd4;
+            margin: 0;
+        }
+        .verdict-box.naive { border-left: 3px solid #64748b; }
+        .verdict-box.ours {
+            border-left: 3px solid var(--accent);
+            background: linear-gradient(160deg, rgba(61, 110, 232, 0.06), var(--surface));
+        }
+        .verdict-footnote {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.65rem;
+            line-height: 1.45;
+        }
+
+        .scenario-row {
+            max-width: 920px;
+            margin: 0 auto 0.85rem;
+            padding: 0 1.5rem;
+        }
+        .scenario-row label {
+            display: block;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            margin-bottom: 0.35rem;
+        }
+        .scenario-row select {
+            width: 100%;
+            max-width: 520px;
+            padding: 0.5rem 0.65rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+
+        .flow-connector {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.15rem;
+            min-width: 2.75rem;
+            color: var(--muted);
+        }
+        .flow-track {
+            position: relative;
+            width: 100%;
+            height: 3px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .flow-dot {
+            position: absolute;
+            top: 50%;
+            left: 0;
+            width: 8px;
+            height: 8px;
+            margin-top: -4px;
+            margin-left: -4px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 10px rgba(61, 110, 232, 0.5);
+            animation: flow-move 1.35s ease-in-out infinite;
+        }
+        .flow-connector.rev .flow-dot {
+            animation-name: flow-move-rev;
+            animation-duration: 1.6s;
+        }
+        .pipeline-wrap.pipeline-danger .node.shop + .flow-connector .flow-dot {
+            background: var(--danger-bright);
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.55);
+            animation-duration: 0.55s;
+        }
+        .pipeline-wrap.pipeline-danger #gateway-node + .flow-connector .flow-dot {
+            background: var(--danger-bright);
+            animation-name: flow-blocked;
+            animation-duration: 0.9s;
+        }
+        @keyframes flow-move {
+            0% { left: 0; opacity: 0.9; }
+            100% { left: 100%; opacity: 0.35; }
+        }
+        @keyframes flow-move-rev {
+            0% { left: 100%; opacity: 0.35; }
+            100% { left: 0; opacity: 0.9; }
+        }
+        @keyframes flow-blocked {
+            0%, 100% { left: 50%; transform: scale(1); opacity: 1; }
+            50% { left: 50%; transform: scale(1.35); opacity: 0.65; }
+        }
+        .flow-arrow {
+            font-size: 0.75rem;
+            opacity: 0.65;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .flow-dot, .story-step.active.danger, .story-step.active.recover-pulse { animation: none; }
+        }
+
+        .live-metrics {
+            max-width: 920px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+        }
+        .live-metrics-inner {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+        }
+        @media (max-width: 800px) {
+            .live-metrics-inner { grid-template-columns: repeat(2, 1fr); }
+        }
+        .live-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.9rem 1rem;
+            text-align: left;
+        }
+        .live-card.spike {
+            border-color: var(--accent);
+            transition: border-color 0.2s ease;
+        }
+        .live-label {
+            display: block;
+            font-size: 0.6875rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            margin-bottom: 0.4rem;
+        }
+        .live-val {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: 1.375rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: var(--text);
+            line-height: 1.2;
+        }
+        .live-val.sm { font-size: 1rem; font-weight: 600; letter-spacing: 0; }
+        .live-val.mode-attack { color: var(--danger-bright); font-weight: 700; }
+        .live-val.mode-normal { color: var(--ok); }
+        .live-card.is-danger {
+            border-color: var(--danger-border);
+            background: var(--danger-bg);
+            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.2);
+        }
+        .live-card.is-danger .live-label { color: var(--danger-bright); }
+        .live-hint {
+            font-size: 0.8125rem;
+            color: var(--muted);
+            margin-top: 0.75rem;
+        }
+        .row-pad {
+            max-width: 920px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+        }
+
+        .impact-strip {
+            max-width: 900px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+            display: none;
+        }
+        .impact-strip.visible { display: block; }
+        .impact-strip-inner {
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+            border-radius: 6px;
+            padding: 0.85rem 1rem;
+            font-size: 0.875rem;
+            color: #fecaca;
+        }
+        .impact-strip-inner strong { color: var(--danger-bright); font-weight: 700; }
+
+        .pipeline-wrap {
+            max-width: 920px;
+            margin: 0 auto 1.5rem;
+            padding: 0 1.5rem;
+            transition: box-shadow 0.2s;
+        }
+        .pipeline-wrap.pipeline-danger .pipeline {
+            border-color: var(--danger-border);
+            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.15);
+        }
+        .pipeline {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 1.25rem 1.5rem;
+        }
+        .node {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.35rem;
+            padding: 0.85rem 1rem;
+            border-radius: 4px;
+            min-width: 108px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+        }
+        .node.shop, .node.catalog { }
+        .node.gateway { min-width: 120px; }
+        .node.gateway.attack {
+            min-width: 200px;
+            border-color: var(--danger-border);
+            background: linear-gradient(145deg, #5c151c 0%, var(--danger-bg) 55%, #2a0a10 100%);
+            box-shadow:
+                0 0 0 2px rgba(239, 68, 68, 0.4),
+                0 8px 28px rgba(239, 68, 68, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            animation: gateway-node-threat 2s ease-in-out infinite;
+        }
+        @keyframes gateway-node-threat {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.4), 0 8px 28px rgba(239, 68, 68, 0.22); }
+            50% { box-shadow: 0 0 0 3px rgba(252, 165, 165, 0.55), 0 10px 36px rgba(239, 68, 68, 0.38); }
+        }
+        .node .label { font-size: 0.625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+        .node .name { font-weight: 600; font-size: 0.9375rem; color: var(--text); }
+        .node.gateway .name { color: var(--text); }
+        .node.gateway.attack .name { color: var(--danger-bright); font-weight: 700; }
+        .node .stat { font-size: 0.8125rem; color: var(--muted); }
+        .node.gateway.attack .stat { color: var(--muted); }
+        .node .blocked-big {
+            font-size: 1.25rem;
+            font-weight: 600;
+            font-family: 'IBM Plex Mono', monospace;
+            color: var(--text);
+            line-height: 1.2;
+            display: none;
+        }
+        .node.gateway.attack .blocked-big { display: block; color: var(--danger-bright); }
+        .node.gateway.attack .stat { display: none; }
+        .node .attack-type { font-size: 0.75rem; color: #fca5a5; max-width: 220px; text-align: left; display: none; line-height: 1.4; }
+        .node.gateway.attack .attack-type { display: block; }
+        .node .origin-line {
+            font-size: 0.6875rem;
+            color: #fca5a5;
+            max-width: 240px;
+            text-align: left;
+            display: none;
+            margin-top: 0.15rem;
+            line-height: 1.35;
+        }
+        .node.gateway.attack .origin-line { display: block; }
+        .node .origin-disclaimer {
+            font-size: 0.625rem;
+            color: var(--muted);
+            max-width: 260px;
+            text-align: left;
+            display: none;
+            margin-top: 0.25rem;
+            line-height: 1.35;
+            opacity: 0.9;
+        }
+        .node.gateway.attack .origin-disclaimer { display: block; }
+        .arrow {
+            font-size: 1rem;
+            color: var(--muted);
+            font-weight: 400;
+        }
+
+        .attack-detail-strip {
+            display: none;
+            max-width: 920px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+        }
+        .attack-detail-strip.visible { display: block; }
+        .attack-detail-inner {
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+            border-radius: 6px;
+            padding: 1rem 1.1rem;
+        }
+        .attack-detail-inner .ad-line {
+            font-size: 0.875rem;
+            color: #fecaca;
+            margin: 0.3rem 0;
+            line-height: 1.45;
+        }
+        .attack-detail-inner .ad-line strong { color: var(--danger-bright); font-weight: 600; }
+        .attack-detail-inner .ad-small {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin: 0.5rem 0 0;
+            line-height: 1.4;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .ctrl-btn {
+            padding: 0.55rem 1.1rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text);
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .ctrl-btn:hover { background: var(--surface-elevated); border-color: #475569; }
+        .ctrl-btn.attack {
+            background: var(--surface);
+            border-color: #6b4a42;
+            color: #d4c4bf;
+        }
+        .ctrl-btn.attack:hover { border-color: #8a5f54; background: var(--warn-bg); }
+        .ctrl-btn.normal {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+        .ctrl-btn.normal:hover { filter: brightness(1.06); }
+        .ctrl-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .shop-frame-wrap {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 1.5rem 2rem;
+        }
+        .shop-frame-wrap .label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: var(--accent);
+            margin-bottom: 0.65rem;
+            text-shadow: 0 0 24px rgba(56, 189, 248, 0.2);
+        }
+        .shop-frame {
+            border: 1px solid rgba(125, 211, 252, 0.18);
+            border-radius: 16px;
+            overflow: hidden;
+            background: linear-gradient(165deg, #0c101c 0%, #06080f 100%);
+            min-height: 420px;
+            transition: border-color 0.25s, box-shadow 0.25s;
+            box-shadow:
+                0 0 0 1px rgba(0, 0, 0, 0.5),
+                0 24px 56px rgba(0, 0, 0, 0.45),
+                0 0 80px rgba(34, 211, 238, 0.06);
+        }
+        .shop-frame.defence-active {
+            border-color: var(--danger-border);
+            box-shadow:
+                0 0 0 2px rgba(239, 68, 68, 0.35),
+                0 24px 56px rgba(239, 68, 68, 0.12);
+        }
+        .shop-frame iframe {
+            width: 100%;
+            height: min(85vh, 820px);
+            min-height: 560px;
+            border: none;
+            display: block;
+        }
+        .hint {
+            font-size: 0.8125rem;
+            color: var(--muted);
+            margin-top: 0.65rem;
+        }
+
+        .status-message {
+            max-width: 920px;
+            margin: 0 auto 1.25rem;
+            padding: 0 1.5rem;
+            opacity: 1;
+            transform: none;
+            pointer-events: auto;
+        }
+        .status-message-inner {
+            border-radius: 6px;
+            padding: 1rem 1.15rem;
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            text-align: left;
+            min-height: 0;
+            border: 1px solid var(--border);
+            background: var(--surface);
+        }
+        .status-message.attack .status-message-inner {
+            background: var(--danger-bg);
+            border: 2px solid var(--danger-border);
+        }
+        .status-message.normal .status-message-inner {
+            border-color: rgba(52, 211, 153, 0.45);
+            background: rgba(22, 40, 35, 0.65);
+        }
+        .status-message.progress .status-message-inner {
+            border-color: rgba(56, 189, 248, 0.45);
+            background: rgba(22, 35, 48, 0.75);
+        }
+        .status-icon {
+            font-size: 1.25rem;
+            line-height: 1;
+            flex-shrink: 0;
+            margin-top: 0.1rem;
+        }
+        .status-content h3 {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+            letter-spacing: -0.01em;
+            color: var(--text);
+        }
+        .status-message.attack .status-content h3 { color: var(--danger-bright); }
+        .status-message.normal .status-content h3 { color: var(--text); }
+        .status-message.progress .status-content h3 { color: var(--text); }
+        .status-content p {
+            font-size: 0.875rem;
+            line-height: 1.5;
+            font-weight: 400;
+            color: var(--muted);
+        }
+        .status-message.attack .status-content p { color: #fecaca; }
+        .status-message.normal .status-content p { color: #9ab5a8; }
+        .status-message.progress .status-content p { color: #9aa8bd; }
+        .status-message.idle .status-message-inner {
+            border-color: var(--border);
+            background: var(--surface);
+        }
+        .status-message.idle .status-content p { color: var(--muted); }
+        .status-message.idle .status-icon {
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 600;
+            font-size: 0.75rem;
+            width: 1.35rem;
+            height: 1.35rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            color: var(--muted);
+        }
+        .status-message.attack .status-icon,
+        .status-message.normal .status-icon,
+        .status-message.progress .status-icon {
+            display: block;
+            width: auto;
+            height: auto;
+            border: none;
+            font-family: 'IBM Plex Mono', monospace;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        .status-message.attack .status-icon { color: var(--danger-bright); }
+
+        /* Full-screen busy overlay so the audience sees what is happening */
+        .demo-busy-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.72);
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+        }
+        .demo-busy-overlay.open {
+            display: flex;
+        }
+        .demo-busy-card {
+            max-width: 420px;
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem 1.75rem;
+            text-align: center;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+        }
+        .demo-busy-card h2 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+        }
+        .demo-busy-card p {
+            font-size: 0.875rem;
+            color: var(--muted);
+            line-height: 1.5;
+            margin-bottom: 1rem;
+        }
+        .demo-busy-spinner {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 1rem;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: demo-spin 0.75s linear infinite;
+        }
+        @keyframes demo-spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ----- Hero status strip (live system headline) ----- */
+        .exhibit-strip {
+            width: 100%;
+            text-align: center;
+            padding: 0.85rem 1.25rem 1rem;
+            border-bottom: 2px solid transparent;
+            transition: background 0.35s ease, border-color 0.35s ease;
+        }
+        .exhibit-strip--normal {
+            background: linear-gradient(180deg, rgba(22, 40, 32, 0.95) 0%, rgba(15, 24, 20, 0.98) 100%);
+            border-bottom-color: rgba(45, 138, 94, 0.55);
+        }
+        .exhibit-strip--attack {
+            background: linear-gradient(180deg, rgba(80, 20, 24, 0.95) 0%, rgba(35, 12, 16, 0.98) 100%);
+            border-bottom-color: rgba(239, 68, 68, 0.65);
+            animation: exhibit-strip-pulse 2.2s ease-in-out infinite;
+        }
+        @keyframes exhibit-strip-pulse {
+            0%, 100% { box-shadow: inset 0 0 0 0 rgba(239, 68, 68, 0); }
+            50% { box-shadow: inset 0 0 60px 0 rgba(239, 68, 68, 0.12); }
+        }
+        .exhibit-strip-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.65rem 1.25rem;
+        }
+        .exhibit-live {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            padding: 0.25rem 0.55rem;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #a8b0b8;
+        }
+        .exhibit-live .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            margin-right: 0.35rem;
+            vertical-align: middle;
+            background: #22c55e;
+            box-shadow: 0 0 10px #22c55e;
+            animation: live-dot-pulse 1.2s ease-in-out infinite;
+        }
+        .exhibit-strip--attack .exhibit-live .dot {
+            background: var(--danger-bright);
+            box-shadow: 0 0 12px rgba(248, 113, 113, 0.9);
+        }
+        @keyframes live-dot-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.45; }
+        }
+        .exhibit-headline {
+            font-size: clamp(1.35rem, 5.5vw, 2.85rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.1;
+            width: 100%;
+            order: 2;
+        }
+        .exhibit-strip--normal .exhibit-headline {
+            color: #b8e6cc;
+            text-shadow: 0 0 40px rgba(45, 138, 94, 0.25);
+        }
+        .exhibit-strip--attack .exhibit-headline {
+            color: #fecaca;
+            text-shadow: 0 0 50px rgba(239, 68, 68, 0.35);
+        }
+        .exhibit-sub {
+            font-size: clamp(0.78rem, 2.2vw, 1rem);
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.55);
+            width: 100%;
+            order: 3;
+            line-height: 1.35;
+        }
+        .exhibit-strip--attack .exhibit-sub { color: #fca5a5; }
+
+        .walkup-hook-wrap {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 1.35rem 1.5rem 0.5rem;
+            text-align: center;
+        }
+        .walkup-hook {
+            font-size: clamp(1.15rem, 4.2vw, 2.15rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.25;
+            color: #c4c9cf;
+        }
+        .walkup-hook strong {
+            color: #fff;
+            background: linear-gradient(90deg, var(--accent), #60a5fa);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .walkup-hook .alt {
+            color: var(--danger-bright);
+            -webkit-text-fill-color: var(--danger-bright);
+            background: none;
+        }
+
+        body.exhibit-engage-flash::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 998;
+            background: rgba(239, 68, 68, 0.22);
+            animation: exhibit-screen-flash 0.55s ease-out forwards;
+        }
+        @keyframes exhibit-screen-flash {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+
+        #gateway-node.gateway-engage-burst {
+            animation: gateway-engage-burst 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        @keyframes gateway-engage-burst {
+            0% {
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+            }
+            35% {
+                transform: scale(1.04);
+                box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.2), 0 0 48px rgba(239, 68, 68, 0.45);
+            }
+            100% {
+                transform: scale(1);
+                box-shadow: none;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .exhibit-strip--attack { animation: none; }
+            .exhibit-live .dot { animation: none; }
+            body.exhibit-engage-flash::after { animation: none; opacity: 0; }
+            #gateway-node.gateway-engage-burst { animation: none; }
+            .defence-alert-bar .defence-alert-dot { animation: none; }
+            .node.gateway.attack { animation: none; }
+        }
+
+        .skip-link {
+            position: absolute;
+            left: -9999px;
+            z-index: 9999;
+            padding: 0.5rem 1rem;
+            background: var(--accent);
+            color: #0f172a;
+            font-weight: 600;
+            border-radius: 4px;
+        }
+        .skip-link:focus {
+            left: 1rem;
+            top: 1rem;
+        }
+
+        :is(a, button, select, input):focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        .demo-footer {
+            margin-top: 2.5rem;
+            padding: 1.25rem 1.5rem 2rem;
+            border-top: 1px solid var(--border);
+            background: linear-gradient(180deg, transparent 0%, rgba(15, 23, 42, 0.35) 100%);
+        }
+        .demo-footer-inner {
+            max-width: 920px;
+            margin: 0 auto;
+            text-align: center;
+        }
+        .demo-footer p {
+            font-size: 0.8125rem;
+            color: var(--muted);
+            margin: 0.25rem 0;
+        }
+        .demo-footer .demo-footer-title {
+            font-weight: 600;
+            color: #cbd5e1;
+            letter-spacing: -0.01em;
+        }
+
+        /* ----- Exhibition / showcase mode (?showcase=1) — readable at distance, one-glance hook ----- */
+        .showcase-only { display: none !important; }
+        html.showcase-mode .showcase-only { display: block !important; }
+        html.showcase-mode .showcase-footer.showcase-only { display: flex !important; }
+
+        html.showcase-mode body {
+            padding-bottom: 4.25rem;
+        }
+        html.showcase-mode .hero,
+        html.showcase-mode .walkup-hook-wrap {
+            display: none !important;
+        }
+        html.showcase-mode .exhibit-headline {
+            font-size: clamp(1.6rem, 5vw, 3.25rem) !important;
+        }
+        html.showcase-mode .exhibit-sub {
+            font-size: clamp(0.95rem, 2.5vw, 1.2rem) !important;
+            max-width: 52rem;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        html.showcase-mode .exhibit-strip {
+            padding: 1.1rem 1.25rem 1.25rem;
+        }
+        html.showcase-mode .demo-header h1 {
+            font-size: 1.35rem;
+        }
+        html.showcase-mode .live-val {
+            font-size: clamp(1.5rem, 4vw, 2rem);
+        }
+        html.showcase-mode .shop-frame iframe {
+            min-height: min(58vh, 720px);
+        }
+
+        .showcase-banner {
+            max-width: 960px;
+            margin: 0 auto 1rem;
+            padding: 0 1.5rem;
+        }
+        .showcase-banner-inner {
+            text-align: center;
+            padding: 1rem 1.25rem 1.15rem;
+            border-radius: 12px;
+            border: 2px solid rgba(56, 189, 248, 0.45);
+            background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.88));
+            box-shadow: 0 0 48px rgba(56, 189, 248, 0.12);
+        }
+        .showcase-elevator {
+            font-size: clamp(1.15rem, 3.2vw, 1.65rem);
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.25;
+            color: #f8fafc;
+            margin: 0 0 0.4rem;
+        }
+        .showcase-sub {
+            font-size: 0.9rem;
+            color: #94a3b8;
+            margin: 0;
+            line-height: 1.45;
+        }
+
+        .showcase-impact {
+            max-width: 920px;
+            margin: -0.25rem auto 1.35rem;
+            padding: 0 1.5rem;
+        }
+        .showcase-impact-inner {
+            text-align: center;
+            padding: 1.25rem 1rem 1.35rem;
+            border-radius: 12px;
+            border: 1px solid rgba(52, 211, 153, 0.35);
+            background: linear-gradient(180deg, rgba(6, 78, 59, 0.25) 0%, rgba(15, 23, 42, 0.92) 100%);
+        }
+        .showcase-impact-label {
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            color: #6ee7b7;
+            margin-bottom: 0.35rem;
+        }
+        .showcase-impact-num {
+            font-family: 'IBM Plex Mono', ui-monospace, monospace;
+            font-size: clamp(2.75rem, 10vw, 4.5rem);
+            font-weight: 700;
+            line-height: 1;
+            letter-spacing: -0.04em;
+            color: #ecfdf5;
+            text-shadow: 0 0 40px rgba(52, 211, 153, 0.25);
+        }
+        .showcase-impact-hint {
+            margin: 0.65rem 0 0;
+            font-size: 0.78rem;
+            color: #94a3b8;
+        }
+        .showcase-impact-hint code {
+            font-size: inherit;
+            color: #7dd3fc;
+        }
+
+        .showcase-footer {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 200;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.5rem 1rem;
+            padding: 0.65rem 1.25rem;
+            font-size: 0.78rem;
+            color: #cbd5e1;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.98));
+            border-top: 1px solid rgba(51, 65, 85, 0.9);
+            box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.35);
+        }
+        .showcase-footer strong { color: #f1f5f9; }
+        .showcase-footer kbd {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            padding: 0.12em 0.4em;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.25);
+        }
+        .showcase-footer-hint { color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div id="gateway-offline-bar" class="gateway-offline-bar" role="alert" aria-live="assertive">
+        <strong>Cannot reach the gateway</strong>
+        <span>— Start the stack from the project folder: <code>py run_demo.py</code>, wait until the terminal says the gateway is up, then refresh. (Expected: <code>http://localhost:8000</code>)</span>
+    </div>
+    <div id="demo-busy-overlay" class="demo-busy-overlay" aria-hidden="true">
+        <div class="demo-busy-card" role="status" aria-live="polite">
+            <div class="demo-busy-spinner" aria-hidden="true"></div>
+            <h2 id="demo-busy-title">Please wait</h2>
+            <p id="demo-busy-detail">…</p>
+        </div>
+    </div>
+    <header class="demo-header" id="demo-header">
+        <div>
+            <h1>Meridian — <span>attack-aware autoscaling</span></h1>
+            <p class="tag">Gateway → catalog · live traffic · policy vs naive scaling</p>
+        </div>
+        <span id="model-badge" class="badge" style="display:none;">Classifier accuracy: <span id="model-acc">—</span>%</span>
+        <span class="badge" id="innov-badge" title="Connected to your running gateway — not a recording">Live system</span>
+    </header>
+
+    <div class="defence-alert-bar" id="defence-alert-bar" role="status" aria-live="assertive">
+        <span class="defence-alert-dot" aria-hidden="true"></span>
+        <strong>DEFENCE ACTIVE</strong>
+        <span class="defence-alert-sub">Gateway is returning <code>429</code> on <code>/products</code> — catalog path is shielded. Click <strong>Restore normal ops</strong> to clear.</span>
+    </div>
+
+    <div id="exhibit-strip" class="exhibit-strip exhibit-strip--normal" role="status" aria-live="assertive" aria-atomic="true">
+        <div class="exhibit-strip-inner">
+            <span class="exhibit-live"><span class="dot" aria-hidden="true"></span>LIVE</span>
+            <span class="exhibit-headline" id="exhibit-headline">TRAFFIC FLOWING · CATALOG IN THE LOOP</span>
+            <span class="exhibit-sub" id="exhibit-sub">Gateway is forwarding /products to the catalog microservice — watch the shop iframe load real SKUs.</span>
+        </div>
+    </div>
+
+    <div id="showcase-banner" class="showcase-banner showcase-only" aria-hidden="true">
+        <div class="showcase-banner-inner">
+            <p class="showcase-elevator">Don’t fund the attack with extra replicas — cut abusive traffic at the gateway.</p>
+            <p class="showcase-sub">Real services: live RPS, ML-informed defence, SQLite audit trail, shop + dashboard on the <strong>same</strong> <code style="font-size:0.88em;color:#93c5fd;">/products</code> route.</p>
+        </div>
+    </div>
+
+    <div class="walkup-hook-wrap">
+        <p class="walkup-hook">The decision in one sentence: <strong>scale replicas to absorb load</strong>, or <span class="alt">contain abuse at the gateway</span> <strong>before</strong> it reaches the catalog.</p>
+    </div>
+
+    <section class="hero" id="main-content">
+        <p class="subhook">Attack-aware autoscaling</p>
+        <p class="punch">Measure live traffic, classify stress, and <strong>defend at the edge</strong> — before the catalog pays for abusive load.</p>
+        <p>This interface mirrors a production-style path: <strong>client → API gateway → catalog service</strong>. Select a threat profile, run the controlled surge, and compare <strong>reactive scaling</strong> with <strong>edge blocking</strong> using the same live metrics, policy engine, and storefront iframe — no mocked route.</p>
+    </section>
+
+    <div class="policy-lab-wrap">
+        <p class="policy-lab-label">Why this is not “just microservices + ML”</p>
+        <div class="policy-lab">
+            <div class="policy-col naive">
+                <h3>Naive autoscaling</h3>
+                <p>Elevated RPS or CPU → add replicas. Malicious traffic still hits the catalog; you spend compute and capacity serving requests that should be refused.</p>
+            </div>
+            <div class="policy-col yours">
+                <h3>Attack-aware gateway policy</h3>
+                <p>A sliding window drives classification; under attack-like stress the gateway returns <strong>HTTP 429</strong> on <strong>/products</strong> and stops forwarding. Defence clears only through an <strong>operator restore</strong> — same route as the live shop, not a hidden test endpoint.</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="threat-banner" class="threat-banner" aria-live="polite">
+        <div class="threat-banner-inner">
+            <span class="wb-icon">EDGE</span>
+            <p class="wb-text"><strong>Threat contained at the gateway.</strong> Abusive <code>/products</code> traffic receives 429; the catalog is no longer absorbing this load. Policy-driven defence — not blind horizontal scale.</p>
+        </div>
+    </div>
+
+    <div class="story-rail-wrap">
+        <p class="story-rail-label">Operational timeline</p>
+        <ol class="story-rail" id="story-rail" aria-label="Scenario stages">
+            <li class="story-step active" id="story-s0" data-k="baseline">Baseline</li>
+            <li class="story-step" id="story-s1" data-k="surge">Surge</li>
+            <li class="story-step" id="story-s2" data-k="analyze">Analyse</li>
+            <li class="story-step" id="story-s3" data-k="enforce">Enforce</li>
+            <li class="story-step" id="story-s4" data-k="recover">Recover</li>
+        </ol>
+    </div>
+
+    <section class="live-metrics" id="live-metrics" aria-live="polite">
+        <div class="live-metrics-inner">
+            <div class="live-card" id="live-card-rps">
+                <span class="live-label">RPS</span>
+                <span class="live-val" id="metric-rps">0</span>
+            </div>
+            <div class="live-card" id="live-card-window">
+                <span class="live-label">Requests (30s)</span>
+                <span class="live-val" id="metric-window">0</span>
+            </div>
+            <div class="live-card" id="live-card-blocked">
+                <span class="live-label">Blocked</span>
+                <span class="live-val" id="metric-blocked">0</span>
+            </div>
+            <div class="live-card" id="live-card-mode">
+                <span class="live-label">Mode</span>
+                <span class="live-val sm mode-normal" id="metric-mode">NORMAL</span>
+            </div>
+        </div>
+        <p class="live-hint">Telemetry from <code style="font-size:0.8em;color:var(--muted);">/admin/metrics</code> — shared with the automated detector service.</p>
+        <p class="shield-estimate" id="shield-estimate">Catalog-bound <code>/products</code> forwards avoided this session (blocked at gateway): <strong id="shield-count">0</strong></p>
+    </section>
+
+    <section class="showcase-impact showcase-only" id="showcase-impact" aria-hidden="true">
+        <div class="showcase-impact-inner">
+            <p class="showcase-impact-label">Impact this session</p>
+            <div class="showcase-impact-num" id="showcase-shield-big">0</div>
+            <p class="showcase-impact-hint">Abusive <code>/products</code> requests stopped <strong>before</strong> the catalog (not hidden in a test script).</p>
+        </div>
+    </section>
+
+    <section class="verdict-section" id="verdict-section" aria-live="polite">
+        <p class="verdict-label">Live policy output (classifier + rules, aligned with the detector service)</p>
+        <div class="verdict-chips" id="verdict-chips">
+            <span class="chip muted" id="chip-stress">Stress: …</span>
+            <span class="chip muted" id="chip-model">Model: …</span>
+            <span class="chip muted" id="chip-edge">Edge: …</span>
+            <span class="chip muted" id="chip-naive-scale">Naive scale: …</span>
+            <span class="chip muted" id="chip-aware-scale">Attack-aware scale: …</span>
+            <span class="chip muted" id="chip-replicas">Catalog instances: …</span>
+        </div>
+        <div class="verdict-columns">
+            <div class="verdict-box">
+                <h4>Traffic interpretation</h4>
+                <p id="pv-traffic">Waiting for gateway…</p>
+            </div>
+            <div class="verdict-box naive">
+                <h4>Naive autoscaling</h4>
+                <p id="pv-naive">—</p>
+            </div>
+            <div class="verdict-box ours">
+                <h4>This gateway</h4>
+                <p id="pv-ours">—</p>
+            </div>
+        </div>
+        <p class="verdict-footnote" id="pv-footnote"></p>
+    </section>
+
+    <div class="sparkline-section">
+        <div class="sparkline-card">
+            <div class="sparkline-head">
+                <span>Request rate (30s window)</span>
+                <span class="spark-peak" id="spark-peak-label">peak —</span>
+            </div>
+            <svg class="sparkline-svg" id="sparkline-svg" viewBox="0 0 400 72" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                    <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#3d6ee8" stop-opacity="0.28"/>
+                        <stop offset="100%" stop-color="#3d6ee8" stop-opacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="sparkGradDanger" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#f87171" stop-opacity="0.3"/>
+                        <stop offset="100%" stop-color="#f87171" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <path class="area" id="spark-area" d=""></path>
+                <path class="line" id="spark-line" d=""></path>
+            </svg>
+        </div>
+    </div>
+
+    <div id="impact-strip" class="impact-strip">
+        <div class="impact-strip-inner"><strong>Defence active</strong> — <code>/products</code> returns HTTP 429 until <strong>Restore normal ops</strong> is used. Operator-only restore; automated clients cannot clear this state.</div>
+    </div>
+    <div class="pipeline-wrap" id="pipeline-wrap">
+        <div class="pipeline">
+            <div class="node shop">
+                <span class="label">Front-end</span>
+                <span class="name">Shop</span>
+            </div>
+            <div class="flow-connector" aria-hidden="true">
+                <span class="flow-arrow">→</span>
+                <div class="flow-track"><span class="flow-dot"></span></div>
+            </div>
+            <div id="gateway-node" class="node gateway">
+                <span class="label">Gateway</span>
+                <span class="name">Normal</span>
+                <span id="gateway-stat" class="stat">Blocked: 0</span>
+                <span id="gateway-blocked-big" class="blocked-big">0</span>
+                <span id="gateway-attack-type" class="attack-type"></span>
+                <span id="gateway-origin" class="origin-line"></span>
+                <span id="gateway-origin-note" class="origin-disclaimer"></span>
+            </div>
+            <div class="flow-connector" aria-hidden="true">
+                <span class="flow-arrow">→</span>
+                <div class="flow-track"><span class="flow-dot"></span></div>
+            </div>
+            <div class="node catalog">
+                <span class="label">Service</span>
+                <span class="name">Catalog</span>
+            </div>
+        </div>
+    </div>
+    <div id="attack-detail-strip" class="attack-detail-strip" aria-live="polite">
+        <div class="attack-detail-inner">
+            <p class="ad-line"><strong>Pattern:</strong> <span id="strip-pattern">—</span></p>
+            <p class="ad-line"><strong>Context label:</strong> <span id="strip-origin">—</span></p>
+            <p class="ad-small" id="strip-disclaimer"></p>
+        </div>
+    </div>
+    <div class="console-wrap">
+        <p class="console-label">Gateway observer</p>
+        <div class="console-feed" id="console-feed" aria-live="polite"></div>
+    </div>
+
+    <div class="scenario-row">
+        <label for="scenario-select">Threat scenario profile (gateway labels when defence engages)</label>
+        <select id="scenario-select" aria-describedby="scenario-hint">
+            <option value="volumetric">Volumetric storm — coordinated pressure on the product API</option>
+            <option value="credential">Credential-stuffing pattern</option>
+            <option value="scrape">Aggressive catalog scrape / inventory hammering</option>
+        </select>
+        <p class="hint" id="scenario-hint" style="margin-top:0.45rem;">The load pattern is the same; the profile updates how the gateway describes the situation once defence activates — useful for incident reporting and stakeholder communication.</p>
+    </div>
+
+    <div class="row-pad">
+    <div class="controls">
+            <button id="btn-attack" class="ctrl-btn attack" type="button" title="Injects a high /products burst; auto-detector or API engages defence" onclick="simulateAttack()">Run live scenario</button>
+            <button id="btn-normal" class="ctrl-btn normal" type="button" title="POST defence mode normal — catalog path reopens" onclick="restoreNormal()">Restore normal ops</button>
+    </div>
+        <p class="hint" style="margin-top:0.65rem;">During the run, watch the <strong>timeline</strong> and <strong>request-rate chart</strong> — they update from live gateway telemetry.</p>
+    </div>
+    <div id="status-message" class="status-message idle" aria-live="polite">
+        <div class="status-message-inner">
+            <span class="status-icon" id="status-icon" aria-hidden="true">i</span>
+            <div class="status-content">
+                <h3 id="status-title">Status</h3>
+                <p id="status-detail">Ready. Use the buttons to switch gateway mode.</p>
+            </div>
+        </div>
+    </div>
+    <div class="shop-frame-wrap">
+        <p class="label">Shop (via gateway)</p>
+        <div id="shop-frame" class="shop-frame">
+            <iframe id="shop-iframe" title="Shop"></iframe>
+        </div>
+    </div>
+
+    <footer class="demo-footer">
+        <div class="demo-footer-inner">
+            <p class="demo-footer-title">Meridian</p>
+            <p>Gateway · catalog · ML-informed defence · SQLite audit — same <code style="font-size:inherit;color:#93c5fd;">/products</code> route as the shop.</p>
+        </div>
+    </footer>
+
+    <div id="showcase-footer" class="showcase-footer showcase-only" aria-hidden="true">
+        <span><strong>Meridian</strong> — attack-aware autoscaling · FYP live system</span>
+        <span class="showcase-footer-hint">Presenter keys: <kbd>R</kbd> run scenario · <kbd>N</kbd> restore normal · Fair URL: add <code style="font-size:0.75em;color:#93c5fd;">?showcase=1</code></span>
+    </div>
+
+    <script>
+        (function () {
+            var f = document.getElementById('shop-iframe');
+            if (f) f.src = 'index.html?v=' + Date.now();
+        })();
+    </script>
+    <script>
+        if (document.documentElement.classList.contains('showcase-mode')) {
+            document.body.classList.add('showcase-mode');
+            document.title = 'Meridian · Attack-aware autoscaling (showcase)';
+            ['showcase-banner', 'showcase-impact', 'showcase-footer'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.setAttribute('aria-hidden', 'false');
+            });
+        }
+        const GATEWAY = 'http://localhost:8000';
+
+        let gatewayHealthFailStreak = 0;
+        const GATEWAY_OFFLINE_AFTER = 3;
+
+        function setGatewayOfflineUi(show) {
+            const bar = document.getElementById('gateway-offline-bar');
+            if (!bar) return;
+            bar.classList.toggle('is-visible', show);
+            document.body.classList.toggle('has-offline-gateway', show);
+        }
+
+        function pingGatewayHealth() {
+            fetch(GATEWAY + '/health', { mode: 'cors', cache: 'no-store' })
+                .then(function (r) {
+                    if (r && r.ok) {
+                        gatewayHealthFailStreak = 0;
+                        setGatewayOfflineUi(false);
+                    } else {
+                        gatewayHealthFailStreak++;
+                        if (gatewayHealthFailStreak >= GATEWAY_OFFLINE_AFTER) setGatewayOfflineUi(true);
+                    }
+                })
+                .catch(function () {
+                    gatewayHealthFailStreak++;
+                    if (gatewayHealthFailStreak >= GATEWAY_OFFLINE_AFTER) setGatewayOfflineUi(true);
+                });
+        }
+
+        const SCENARIOS = {
+            volumetric: {
+                attack_type: 'High-volume coordinated request storm',
+                traffic_origin: 'Label: volumetric burst / synthetic load',
+                console: 'scenario | profile: DDoS-shaped pressure on /products',
+            },
+            credential: {
+                attack_type: 'Credential stuffing / brute-force pattern',
+                traffic_origin: 'Label: scripted auth-like probe (illustrative)',
+                console: 'scenario | profile: credential-stuffing shaped load',
+            },
+            scrape: {
+                attack_type: 'Aggressive catalog scraping pattern',
+                traffic_origin: 'Label: rapid catalog enumeration (illustrative)',
+                console: 'scenario | profile: scraping / inventory hammering',
+            },
+        };
+
+        function getScenarioPayload() {
+            const sel = document.getElementById('scenario-select');
+            const key = sel && sel.value ? sel.value : 'volumetric';
+            return SCENARIOS[key] || SCENARIOS.volumetric;
+        }
+
+        async function applyScenarioLabelsToGateway() {
+            const s = getScenarioPayload();
+            try {
+                await fetch(GATEWAY + '/admin/defence-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'attack',
+                        attack_type: s.attack_type,
+                        traffic_origin: s.traffic_origin,
+                    }),
+                    mode: 'cors',
+                });
+            } catch (e) { /* ignore */ }
+            updatePipeline();
+        }
+
+        let lastDefenceForIframe;
+        /** Last known mode from a successful API response — never downgrade to normal on fetch failure. */
+        let lastResolvedMode = 'normal';
+
+        function mergeDefenceMode(status, stats) {
+            const a = status && status.defence_mode;
+            const b = stats && stats.defence_mode;
+            if (a === 'attack' || b === 'attack') return 'attack';
+            if (a === 'normal' || b === 'normal') return 'normal';
+            if (a != null) return a;
+            if (b != null) return b;
+            return lastResolvedMode;
+        }
+
+        let lastRps = 0;
+        const rpsHistory = [];
+        const RPS_HIST_MAX = 90;
+        let recoverNarrativeTimer;
+        let threatBannerTimer;
+
+        const NARRATIVE_ORDER = ['baseline', 'surge', 'analyze', 'enforce', 'recover'];
+
+        function applyNarrative(key) {
+            const idx = NARRATIVE_ORDER.indexOf(key);
+            if (idx < 0) return;
+            for (let i = 0; i < 5; i++) {
+                const el = document.getElementById('story-s' + i);
+                if (!el) continue;
+                el.classList.toggle('done', i < idx);
+                el.classList.toggle('active', i === idx);
+                el.classList.remove('danger', 'recover-pulse');
+                if (i === idx && key === 'enforce') el.classList.add('danger');
+                if (i === idx && key === 'recover') el.classList.add('recover-pulse');
+            }
+        }
+
+        function pushConsole(msg, cls) {
+            const feed = document.getElementById('console-feed');
+            if (!feed) return;
+            const t = new Date().toLocaleTimeString([], { hour12: false });
+            const p = document.createElement('p');
+            p.className = 'line ' + (cls || '');
+            p.textContent = '[' + t + '] ' + msg;
+            feed.appendChild(p);
+            while (feed.children.length > 14) feed.removeChild(feed.firstChild);
+            feed.scrollTop = feed.scrollHeight;
+        }
+
+        function openThreatBanner() {
+            const b = document.getElementById('threat-banner');
+            if (!b) return;
+            b.classList.add('open');
+            clearTimeout(threatBannerTimer);
+            threatBannerTimer = setTimeout(function () {
+                b.classList.remove('open');
+            }, 10000);
+        }
+
+        function closeThreatBanner() {
+            const b = document.getElementById('threat-banner');
+            if (b) b.classList.remove('open');
+            clearTimeout(threatBannerTimer);
+        }
+
+        function redrawSparkline() {
+            let hist = rpsHistory.slice();
+            if (hist.length === 0) return;
+            if (hist.length === 1) hist = [hist[0], hist[0]];
+            const w = 400;
+            const h = 72;
+            const pad = 4;
+            const maxVal = Math.max(1.2, ...hist);
+            const minVal = 0;
+            const n = hist.length;
+            const step = (w - pad * 2) / (n - 1);
+            let dLine = '';
+            let xLast = pad;
+            hist.forEach(function (v, i) {
+                const x = pad + i * step;
+                const y = pad + (h - pad * 2) * (1 - (v - minVal) / (maxVal - minVal));
+                dLine += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+                xLast = x;
+            });
+            const bottom = h - pad;
+            let dArea = 'M' + pad + ' ' + bottom + ' ';
+            hist.forEach(function (v, i) {
+                const x = pad + i * step;
+                const y = pad + (h - pad * 2) * (1 - (v - minVal) / (maxVal - minVal));
+                dArea += 'L' + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+            });
+            dArea += 'L' + xLast.toFixed(1) + ' ' + bottom + ' Z';
+            const line = document.getElementById('spark-line');
+            const area = document.getElementById('spark-area');
+            const peakEl = document.getElementById('spark-peak-label');
+            const danger = document.body.classList.contains('demo-attack-active');
+            if (line) line.setAttribute('d', dLine.trim());
+            if (area) {
+                area.setAttribute('d', dArea);
+                area.setAttribute('fill', danger ? 'url(#sparkGradDanger)' : 'url(#sparkGrad)');
+            }
+            if (peakEl) {
+                const peak = Math.max(...hist);
+                peakEl.textContent = 'peak ' + peak.toFixed(1) + ' rps (window)';
+            }
+        }
+
+        function flashCard(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('spike');
+            void el.offsetWidth;
+            el.classList.add('spike');
+        }
+
+        function refreshShopIframe() {
+            const iframe = document.getElementById('shop-iframe');
+            if (!iframe) return;
+            iframe.src = 'index.html?v=' + Date.now();
+        }
+
+        function syncExhibitStrip(mode) {
+            const strip = document.getElementById('exhibit-strip');
+            const head = document.getElementById('exhibit-headline');
+            const sub = document.getElementById('exhibit-sub');
+            if (!strip || !head || !sub) return;
+            const attack = mode === 'attack';
+            strip.classList.toggle('exhibit-strip--attack', attack);
+            strip.classList.toggle('exhibit-strip--normal', !attack);
+            if (attack) {
+                head.textContent = 'CATALOG SHIELDED — EDGE IS BLOCKING';
+                sub.textContent = '429 on /products at the gateway · catalog not proxying this abuse · restore is deliberate (operator only).';
+            } else {
+                head.textContent = 'TRAFFIC FLOWING · CATALOG IN THE LOOP';
+                sub.textContent = 'Gateway is forwarding /products to the catalog microservice — watch the shop iframe load real SKUs.';
+            }
+        }
+
+        function triggerExhibitEngageMoment() {
+            document.body.classList.remove('exhibit-engage-flash');
+            void document.body.offsetWidth;
+            document.body.classList.add('exhibit-engage-flash');
+            window.setTimeout(function () {
+                document.body.classList.remove('exhibit-engage-flash');
+            }, 600);
+            const gn = document.getElementById('gateway-node');
+            if (gn) {
+                gn.classList.remove('gateway-engage-burst');
+                void gn.offsetWidth;
+                gn.classList.add('gateway-engage-burst');
+                window.setTimeout(function () {
+                    gn.classList.remove('gateway-engage-burst');
+                }, 950);
+            }
+        }
+
+        function setChip(el, text, variant) {
+            if (!el) return;
+            el.textContent = text;
+            el.className = 'chip' + (variant ? ' ' + variant : ' muted');
+        }
+
+        function updatePolicyPanel(p) {
+            const foot = document.getElementById('pv-footnote');
+            if (!p) {
+                if (foot) foot.textContent = 'Policy data unavailable — check that the gateway service is running.';
+                return;
+            }
+            const lines = p.lines || {};
+            const stressAttack = p.stress_treated_as === 'attack_like';
+            const edgeBlock = p.edge_behaviour === 'blocking';
+            const naiveUp = p.naive_autoscaling_would === 'spin_up_more_servers';
+            const awareUp = p.attack_aware_scaling_would === 'spin_up_more_servers';
+
+            setChip(document.getElementById('chip-stress'), stressAttack ? 'Stress: ATTACK-LIKE' : 'Stress: LEGITIMATE-LIKE', stressAttack ? 'danger' : 'ok');
+            setChip(document.getElementById('chip-model'), 'Classifier: ' + String(p.model_label || '—').toUpperCase(), stressAttack ? 'danger' : 'ok');
+            setChip(document.getElementById('chip-edge'), edgeBlock ? 'Edge: BLOCKING /products' : 'Edge: FORWARDING', edgeBlock ? 'edge-block' : 'edge-fwd');
+            setChip(document.getElementById('chip-naive-scale'), naiveUp ? 'Naive scaler: ADD SERVERS' : 'Naive scaler: HOLD', naiveUp ? 'danger' : 'muted');
+            setChip(document.getElementById('chip-aware-scale'), awareUp ? 'Attack-aware: ADD SERVERS' : 'Attack-aware: HOLD', awareUp ? 'ok' : 'edge-block');
+            setChip(document.getElementById('chip-replicas'), 'Catalog instances (demo): ' + (p.catalog_instances_configured != null ? p.catalog_instances_configured : '1'), 'muted');
+
+            const t = document.getElementById('pv-traffic');
+            const n = document.getElementById('pv-naive');
+            const o = document.getElementById('pv-ours');
+            if (t) t.textContent = lines.traffic_verdict || '—';
+            if (n) n.textContent = lines.naive_autoscaling || '—';
+            if (o) o.textContent = lines.attack_aware || '—';
+            if (foot) foot.textContent = p.prototype_note || '';
+        }
+
+        function pollLiveMetrics() {
+            fetch(GATEWAY + '/admin/metrics', { mode: 'cors' })
+                .then(r => (r && r.ok ? r.json() : null))
+                .then(m => {
+                    if (!m) return;
+                    const rps = m.rps != null ? Number(m.rps) : 0;
+                    const el = document.getElementById('metric-rps');
+                    const winEl = document.getElementById('metric-window');
+                    if (el) el.textContent = rps.toFixed(1);
+                    if (winEl) winEl.textContent = m.requests_last_30s != null ? String(m.requests_last_30s) : '0';
+                    if (rps > lastRps + 3) flashCard('live-card-rps');
+                    lastRps = rps;
+                    rpsHistory.push(rps);
+                    if (rpsHistory.length > RPS_HIST_MAX) rpsHistory.shift();
+                    redrawSparkline();
+                })
+                .catch(() => {});
+            fetch(GATEWAY + '/admin/stats', { mode: 'cors' })
+                .then(r => (r && r.ok ? r.json() : null))
+                .then(s => {
+                    if (!s) return;
+                    const blocked = s.blocked_total != null ? s.blocked_total : 0;
+                    const mode = mergeDefenceMode(null, s);
+                    lastResolvedMode = mode;
+                    const prevMode = lastDefenceForIframe;
+                    const bEl = document.getElementById('metric-blocked');
+                    if (bEl) bEl.textContent = String(blocked);
+                    const shieldEl = document.getElementById('shield-count');
+                    if (shieldEl) shieldEl.textContent = String(blocked);
+                    const shieldBig = document.getElementById('showcase-shield-big');
+                    if (shieldBig) shieldBig.textContent = String(blocked);
+                    const modeEl = document.getElementById('metric-mode');
+                    if (modeEl) {
+                        const attack = mode === 'attack';
+                        modeEl.textContent = attack ? 'DEFENCE' : 'NORMAL';
+                        modeEl.className = 'live-val sm ' + (attack ? 'mode-attack' : 'mode-normal');
+                    }
+                    if (prevMode !== undefined && prevMode !== mode) {
+                        refreshShopIframe();
+                        flashCard('live-card-blocked');
+                        if (mode === 'attack') {
+                            triggerExhibitEngageMoment();
+                            pushConsole('policy | DEFENCE active · /products → 429 (catalog shielded)', 'c-err');
+                            applyNarrative('enforce');
+                            openThreatBanner();
+                            fetch(GATEWAY + '/admin/status', { mode: 'cors' })
+                                .then(function (r) {
+                                    return r && r.ok ? r.json() : null;
+                                })
+                                .then(function (st) {
+                                    if (st && st.last_attack_type) {
+                                        pushConsole('detector | pattern label: ' + st.last_attack_type, 'c-warn');
+                                    }
+                                })
+                                .catch(function () {});
+                        } else if (mode === 'normal' && prevMode === 'attack') {
+                            pushConsole('policy | NORMAL · forwarding /products → catalog', 'c-ok');
+                            closeThreatBanner();
+                            applyNarrative('recover');
+                            clearTimeout(recoverNarrativeTimer);
+                            recoverNarrativeTimer = setTimeout(function () {
+                                applyNarrative('baseline');
+                            }, 4500);
+                        }
+                    }
+                    lastDefenceForIframe = mode;
+                    document.body.classList.toggle('demo-attack-active', mode === 'attack');
+                    const dh = document.getElementById('demo-header');
+                    if (dh) dh.classList.toggle('defence-active', mode === 'attack');
+                    syncExhibitStrip(mode);
+                    if (prevMode === undefined) {
+                        applyNarrative(mode === 'attack' ? 'enforce' : 'baseline');
+                        if (mode === 'attack') {
+                            pushConsole('state | defence already active on page load', 'c-warn');
+                            openThreatBanner();
+                        }
+                    }
+                    const sf = document.getElementById('shop-frame');
+                    if (sf) sf.classList.toggle('defence-active', mode === 'attack');
+                    const modeCard = document.getElementById('live-card-mode');
+                    if (modeCard) modeCard.classList.toggle('is-danger', mode === 'attack');
+                    updatePolicyPanel(s.policy);
+                    redrawSparkline();
+                })
+                .catch(() => {});
+        }
+
+        function showStatus(type, title, detail) {
+            const el = document.getElementById('status-message');
+            const icon = document.getElementById('status-icon');
+            const titleEl = document.getElementById('status-title');
+            const detailEl = document.getElementById('status-detail');
+            if (!el) return;
+            const t = type || 'idle';
+            el.className = 'status-message ' + t;
+            if (icon) {
+                icon.textContent = t === 'attack' ? '!' : t === 'normal' ? 'OK' : t === 'progress' ? '…' : 'i';
+            }
+            if (titleEl) titleEl.textContent = title || '';
+            if (detailEl) detailEl.textContent = detail || '';
+        }
+
+        function showBusy(title, detail) {
+            const ov = document.getElementById('demo-busy-overlay');
+            const t = document.getElementById('demo-busy-title');
+            const d = document.getElementById('demo-busy-detail');
+            if (ov) {
+                ov.classList.add('open');
+                ov.setAttribute('aria-hidden', 'false');
+            }
+            if (t) t.textContent = title || 'Please wait';
+            if (d) d.textContent = detail || '';
+        }
+
+        function setBusyDetail(detail) {
+            const d = document.getElementById('demo-busy-detail');
+            if (d) d.textContent = detail || '';
+        }
+
+        function hideBusy() {
+            const ov = document.getElementById('demo-busy-overlay');
+            if (ov) {
+                ov.classList.remove('open');
+                ov.setAttribute('aria-hidden', 'true');
+            }
+        }
+
+        function updatePipeline() {
+            Promise.all([
+                fetch(GATEWAY + '/admin/status', { mode: 'cors' }).then(r => (r && r.ok ? r.json() : null)).catch(() => null),
+                fetch(GATEWAY + '/admin/stats', { mode: 'cors' }).then(r => (r && r.ok ? r.json() : null)).catch(() => null),
+            ]).then(function (results) {
+                const status = results[0];
+                const stats = results[1];
+                const mode = mergeDefenceMode(status, stats);
+                lastResolvedMode = mode;
+                document.body.classList.toggle('demo-attack-active', mode === 'attack');
+                const dh = document.getElementById('demo-header');
+                if (dh) dh.classList.toggle('defence-active', mode === 'attack');
+                syncExhibitStrip(mode);
+                const sf = document.getElementById('shop-frame');
+                if (sf) sf.classList.toggle('defence-active', mode === 'attack');
+                    const blocked = (stats && stats.blocked_total) || 0;
+                    const attackType = (status && status.last_attack_type) || '';
+                    const demoOrigin = (status && status.demo_traffic_origin) || '';
+                    const disc = (status && status.demo_origin_disclaimer) || '';
+                    const node = document.getElementById('gateway-node');
+                if (!node) return;
+                    const name = node.querySelector('.name');
+                    const stat = document.getElementById('gateway-stat');
+                    const blockedBig = document.getElementById('gateway-blocked-big');
+                    const typeEl = document.getElementById('gateway-attack-type');
+                    const originEl = document.getElementById('gateway-origin');
+                    const discEl = document.getElementById('gateway-origin-note');
+                    node.classList.toggle('attack', mode === 'attack');
+                if (name) name.textContent = mode === 'attack' ? 'Blocking' : 'Normal';
+                if (stat) stat.textContent = 'Blocked: ' + blocked;
+                    if (blockedBig) blockedBig.textContent = String(blocked);
+                if (mode === 'attack' && attackType && typeEl) {
+                        typeEl.textContent = attackType;
+                        typeEl.style.display = 'block';
+                } else if (typeEl) {
+                        typeEl.textContent = '';
+                        typeEl.style.display = 'none';
+                    }
+                    if (mode === 'attack' && demoOrigin && originEl) {
+                        originEl.textContent = demoOrigin;
+                        originEl.style.display = 'block';
+                    } else if (originEl) {
+                        originEl.textContent = '';
+                        originEl.style.display = 'none';
+                    }
+                    if (mode === 'attack' && disc && discEl) {
+                        discEl.textContent = disc;
+                        discEl.style.display = 'block';
+                    } else if (discEl) {
+                        discEl.textContent = '';
+                        discEl.style.display = 'none';
+                    }
+
+                    const strip = document.getElementById('attack-detail-strip');
+                    const stripPat = document.getElementById('strip-pattern');
+                    const stripOrig = document.getElementById('strip-origin');
+                    const stripDisc = document.getElementById('strip-disclaimer');
+                    if (mode === 'attack') {
+                        if (strip) strip.classList.add('visible');
+                        if (stripPat) stripPat.textContent = attackType || '—';
+                        if (stripOrig) stripOrig.textContent = demoOrigin || '—';
+                        if (stripDisc) stripDisc.textContent = disc || '';
+                    } else {
+                        if (strip) strip.classList.remove('visible');
+                        if (stripPat) stripPat.textContent = '—';
+                        if (stripOrig) stripOrig.textContent = '—';
+                        if (stripDisc) stripDisc.textContent = '';
+                    }
+
+                const impact = document.getElementById('impact-strip');
+                if (impact) impact.classList.toggle('visible', mode === 'attack');
+                const pipeWrap = document.getElementById('pipeline-wrap');
+                if (pipeWrap) pipeWrap.classList.toggle('pipeline-danger', mode === 'attack');
+            }).catch(function () {});
+        }
+
+        function loadModelBadge() {
+            fetch(GATEWAY + '/admin/model-info', { mode: 'cors' }).catch(() => null).then(r => r && r.ok ? r.json() : null).then(info => {
+                const acc = info && info.accuracy != null;
+                const badge = document.getElementById('model-badge');
+                const accEl = document.getElementById('model-acc');
+                if (badge && accEl && acc) {
+                    accEl.textContent = Math.round(info.accuracy * 100);
+                    badge.style.display = 'inline-block';
+                }
+            });
+        }
+
+        async function simulateAttack() {
+            const btn = document.getElementById('btn-attack');
+            let attackAchieved = false;
+            clearTimeout(recoverNarrativeTimer);
+            btn.disabled = true;
+            btn.textContent = 'Working…';
+            applyNarrative('surge');
+            pushConsole('scenario | controlled burst → /products (same route as the shop iframe)', 'c-warn');
+            showBusy('Running the scenario', 'Injecting traffic on the same API path the shop uses.');
+            showStatus('progress', 'Working…', 'Sending traffic to the gateway.');
+            try {
+                setBusyDetail('Firing many concurrent /products requests…');
+                for (let i = 0; i < 450; i++) {
+                    fetch(GATEWAY + '/products', { mode: 'cors' }).catch(() => {});
+                }
+                updatePipeline();
+                applyNarrative('analyze');
+                pushConsole('gateway | sliding window ingesting samples; detector evaluating…');
+                setBusyDetail('Waiting for auto-defence (usually a few seconds)…');
+                for (let w = 0; w < 16; w++) {
+                    await new Promise(r => setTimeout(r, 500));
+                    const r = await fetch(GATEWAY + '/admin/status', { mode: 'cors' }).catch(() => null);
+                    if (r && r.ok) {
+                        const s = await r.json();
+                        if (s && s.defence_mode === 'attack') {
+                            attackAchieved = true;
+                            updatePipeline();
+                            refreshShopIframe();
+                            showStatus('attack', 'Defence on', 'Gateway returns 429 on /products. Click Restore normal ops.');
+                            break;
+                        }
+                    }
+                }
+                const check = await fetch(GATEWAY + '/admin/status', { mode: 'cors' }).catch(() => null);
+                const data = check && check.ok ? await check.json() : {};
+                if (data.defence_mode !== 'attack') {
+                    setBusyDetail('Applying defence via admin API (fallback if detector lags)…');
+                    const scen = getScenarioPayload();
+                    const postRes = await fetch(GATEWAY + '/admin/defence-mode', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            mode: 'attack',
+                            attack_type: scen.attack_type,
+                            traffic_origin: scen.traffic_origin,
+                        }),
+                        mode: 'cors',
+                    }).catch(() => null);
+                    const postOk = postRes && postRes.ok;
+                    const postData = postOk ? await postRes.json().catch(() => ({})) : {};
+                    const nowAttack = postData.defence_mode === 'attack';
+                    if (nowAttack) {
+                        attackAchieved = true;
+                        updatePipeline();
+                        refreshShopIframe();
+                        showStatus('attack', 'Defence on', 'Gateway returns 429 on /products. Click Restore normal ops.');
+                    } else {
+                        pushConsole('alert | no defence transition — verify gateway at :8000', 'c-err');
+                        showStatus('progress', 'Gateway check', 'Is the gateway running on port 8000?');
+                        updatePipeline();
+                    }
+                } else {
+                    attackAchieved = true;
+                }
+                if (attackAchieved) {
+                    await applyScenarioLabelsToGateway();
+                    pushConsole(getScenarioPayload().console, 'c-warn');
+                }
+            } finally {
+                hideBusy();
+                btn.disabled = false;
+                btn.textContent = 'Run live scenario';
+                if (!attackAchieved) applyNarrative('baseline');
+                updatePipeline();
+            }
+        }
+
+        async function restoreNormal() {
+            const btn = document.getElementById('btn-normal');
+            clearTimeout(recoverNarrativeTimer);
+            closeThreatBanner();
+            btn.disabled = true;
+            btn.textContent = 'Working…';
+            pushConsole('operator | POST /admin/defence-mode → normal', 'c-ok');
+            showBusy('Restoring operations', 'Clearing defence mode on the gateway.');
+            showStatus('progress', 'Restoring…', 'Turning off defence mode.');
+            try {
+                const res = await fetch(GATEWAY + '/admin/defence-mode', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Manual-Restore': '1',
+                    },
+                    body: JSON.stringify({ mode: 'normal' }),
+                    mode: 'cors',
+                });
+                if (!res.ok) {
+                    let msg = 'Restore failed (' + res.status + ').';
+                    try {
+                        const j = await res.json();
+                        if (j && j.detail) msg = String(j.detail);
+                    } catch (e) { /* ignore */ }
+                    pushConsole('operator | restore rejected: ' + msg, 'c-err');
+                    showStatus('progress', 'Restore failed', msg);
+                    return;
+                }
+                updatePipeline();
+                setTimeout(() => {
+                    refreshShopIframe();
+                }, 600);
+                showStatus('normal', 'Normal', 'Gateway is proxying to the catalog again.');
+            } finally {
+                hideBusy();
+                btn.disabled = false;
+                btn.textContent = 'Restore normal ops';
+            }
+        }
+
+        pushConsole('observer | connected · polling /admin/metrics and /admin/stats', 'c-ok');
+        pingGatewayHealth();
+        setInterval(pingGatewayHealth, 2500);
+        updatePipeline();
+        setInterval(updatePipeline, 2000);
+        setInterval(pollLiveMetrics, 400);
+        pollLiveMetrics();
+        loadModelBadge();
+
+        document.addEventListener('keydown', function (e) {
+            if (!document.documentElement.classList.contains('showcase-mode')) return;
+            var tag = (e.target && e.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (e.key === 'r' || e.key === 'R') {
+                var ba = document.getElementById('btn-attack');
+                if (ba && !ba.disabled) {
+                    e.preventDefault();
+                    ba.click();
+                }
+            } else if (e.key === 'n' || e.key === 'N') {
+                var bn = document.getElementById('btn-normal');
+                if (bn && !bn.disabled) {
+                    e.preventDefault();
+                    bn.click();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
